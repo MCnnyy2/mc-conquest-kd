@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>攻防实时战况</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
+            background: #0a0f1e;
+            color: #e0e6f0;
+            padding: 20px;
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+        }
+        .header {
+            text-align: center;
+            padding: 20px 0;
+            border-bottom: 2px solid #1e2a4a;
+            margin-bottom: 25px;
+        }
+        .header h1 {
+            font-size: 2.2em;
+            letter-spacing: 2px;
+            text-shadow: 0 0 15px rgba(100, 150, 255, 0.5);
+        }
+        .forces-banner {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: linear-gradient(90deg, #1a2b4c, #0f1a30);
+            border-radius: 12px;
+            padding: 16px 30px;
+            margin-bottom: 25px;
+            font-size: 1.4em;
+            border: 1px solid #2a3a5a;
+        }
+        .forces-banner .attacker {
+            color: #5b9cf5;
+            font-weight: bold;
+        }
+        .forces-banner .defender {
+            color: #f55b5b;
+            font-weight: bold;
+        }
+        .forces-banner .icon {
+            font-size: 1.6em;
+            margin: 0 8px;
+        }
+
+        /* ========== 时间线环形进度 ========== */
+        .timeline {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #0d1425;
+            border-radius: 14px;
+            padding: 28px 20px;
+            margin-bottom: 25px;
+            border: 1px solid #1e2a4a;
+            flex-wrap: wrap;
+        }
+        .point-entry {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            flex-shrink: 0;
+        }
+        .ring-wrapper {
+            position: relative;
+            width: 110px;
+            height: 110px;
+            flex-shrink: 0;
+        }
+        .ring-wrapper svg {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+        .ring-bg {
+            fill: none;
+            stroke: #1e2a4a;
+            stroke-width: 5;
+        }
+        .ring-progress {
+            fill: none;
+            stroke: #5b9cf5;
+            stroke-width: 5;
+            stroke-linecap: round;
+            transition: stroke-dashoffset 0.4s ease, stroke 0.4s ease;
+        }
+        .ring-progress.completed {
+            stroke: #4fc3f7;
+            filter: drop-shadow(0 0 6px rgba(90, 170, 255, 0.7));
+        }
+        .point-box {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 58px;
+            height: 58px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 1.15em;
+            background: #121a2b;
+            border: 4px solid #2a3a5a;
+            z-index: 2;
+            transition: border-color 0.3s ease, box-shadow 0.3s ease;
+        }
+        .point-box .point-name {
+            z-index: 1;
+            color: #fff;
+            text-shadow: 0 0 8px black;
+        }
+        .point-box.captured {
+            border-color: #3a6bd5;
+            box-shadow: 0 0 16px rgba(90, 150, 255, 0.45);
+        }
+        .prog-label {
+            font-size: 0.8em;
+            margin-top: 6px;
+            color: #a0b0c8;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            transition: color 0.3s ease;
+        }
+        .prog-label.done {
+            color: #4fc3f7;
+        }
+        .connector {
+            position: relative;
+            width: 38px;
+            height: 4px;
+            background: #2a3a5a;
+            margin: 0 -3px;
+            flex-shrink: 0;
+            border-radius: 2px;
+            transition: background 0.3s ease;
+        }
+        .connector::after {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #2a3a5a;
+            border: 2px solid #0d1425;
+            transition: background 0.3s ease, border-color 0.3s ease;
+        }
+        .connector.captured {
+            background: #3a6bd5;
+        }
+        .connector.captured::after {
+            background: #3a6bd5;
+            border-color: #3a6bd5;
+            box-shadow: 0 0 6px rgba(90, 150, 255, 0.5);
+        }
+
+        /* ========== 双列统计 ========== */
+        .stats-container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-top: 20px;
+        }
+        .faction-panel {
+            background: #0d1425;
+            border-radius: 12px;
+            padding: 16px;
+            border: 1px solid #1e2a4a;
+        }
+        .faction-panel h3 {
+            font-size: 1.3em;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .faction-panel.attack h3 {
+            color: #5b9cf5;
+        }
+        .faction-panel.defend h3 {
+            color: #f55b5b;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.9em;
+        }
+        th,
+        td {
+            padding: 6px 8px;
+            text-align: center;
+            border-bottom: 1px solid #1e2a4a;
+        }
+        th {
+            background: #0f1a30;
+            font-weight: 600;
+        }
+        .warn {
+            color: #e67e22;
+            text-align: center;
+            padding: 10px;
+        }
+
+        @media (max-width: 600px) {
+            .ring-wrapper {
+                width: 85px;
+                height: 85px;
+            }
+            .point-box {
+                width: 44px;
+                height: 44px;
+                font-size: 0.9em;
+                border-radius: 8px;
+            }
+            .connector {
+                width: 20px;
+            }
+            .ring-bg,
+            .ring-progress {
+                stroke-width: 4;
+            }
+            .forces-banner {
+                font-size: 1em;
+                padding: 12px 16px;
+                flex-wrap: wrap;
+                gap: 6px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>⚔️ 攻防实时战况</h1>
+        </div>
+
+        <div class="forces-banner">
+            <div><span class="icon">🛡️</span> 攻方兵力：<span id="forces-val">--</span></div>
+            <div><span class="attacker">攻方</span> <span class="icon">➹</span></div>
+            <div><span class="defender">防方</span> <span class="icon">♜</span></div>
+        </div>
+
+        <div class="timeline" id="timeline"></div>
+
+        <div class="stats-container">
+            <div class="faction-panel attack">
+                <h3>🔵 攻方</h3>
+                <table>
+                    <thead>
+                        <tr><th>排名</th><th>玩家</th><th>小队</th><th>K</th><th>D</th><th>K/D</th></tr>
+                    </thead>
+                    <tbody id="attack-tbody"></tbody>
+                </table>
+            </div>
+            <div class="faction-panel defend">
+                <h3>🔴 守方</h3>
+                <table>
+                    <thead>
+                        <tr><th>排名</th><th>玩家</th><th>小队</th><th>K</th><th>D</th><th>K/D</th></tr>
+                    </thead>
+                    <tbody id="defend-tbody"></tbody>
+                </table>
+            </div>
+        </div>
+        <div class="warn" id="warn"></div>
+    </div>
+
+    <script>
+        const POINTS_ORDER = ['A', 'B1', 'B2', 'C1', 'C2'];
+
+        // SVG 圆环参数
+        const SVG_SIZE = 110;
+        const SVG_CENTER = SVG_SIZE / 2;
+        const SVG_RADIUS = 50;
+        const SVG_CIRCUMFERENCE = 2 * Math.PI * SVG_RADIUS;
+
+        async function loadData() {
+            try {
+                const [infoRes, playersRes] = await Promise.all([
+                    fetch('1.php?file=gf_info.txt'),
+                    fetch('1.php?file=gf_player.csv')
+                ]);
+                if (!infoRes.ok || !playersRes.ok) throw new Error('HTTP error');
+                const info = await infoRes.json();
+                const players = await playersRes.json();
+                render(info, players);
+                document.getElementById('warn').textContent = '';
+            } catch (e) {
+                console.error(e);
+                document.getElementById('warn').textContent = '⚠️ 数据获取失败，请检查连接。';
+            }
+        }
+
+        function render(info, players) {
+            // 兵力显示
+            document.getElementById('forces-val').textContent = info.attacker_forces ?? '--';
+
+            // 渲染时间线环形进度
+            renderTimeline(info);
+
+            // 渲染玩家列表
+            renderPlayers(players);
+        }
+
+        function renderTimeline(info) {
+            const timeline = document.getElementById('timeline');
+            timeline.innerHTML = '';
+
+            POINTS_ORDER.forEach((name, idx) => {
+                const rawProgress = info.points ? (info.points[name] ?? 0) : 0;
+                const progress = Math.min(100, Math.max(0, Number(rawProgress) || 0));
+                const captured = progress >= 100;
+
+                // 据点容器
+                const entry = document.createElement('div');
+                entry.className = 'point-entry';
+
+                // 环形进度条 + 方框
+                const ringWrapper = document.createElement('div');
+                ringWrapper.className = 'ring-wrapper';
+
+                const offset = SVG_CIRCUMFERENCE * (1 - progress / 100);
+                const progressClass = captured ? ' completed' : '';
+
+                ringWrapper.innerHTML = `
+                    <svg viewBox="0 0 ${SVG_SIZE} ${SVG_SIZE}" xmlns="http://www.w3.org/2000/svg">
+                        <circle class="ring-bg" cx="${SVG_CENTER}" cy="${SVG_CENTER}" r="${SVG_RADIUS}"></circle>
+                        <circle class="ring-progress${progressClass}"
+                                cx="${SVG_CENTER}" cy="${SVG_CENTER}" r="${SVG_RADIUS}"
+                                transform="rotate(-90 ${SVG_CENTER} ${SVG_CENTER})"
+                                stroke-dasharray="${SVG_CIRCUMFERENCE}"
+                                stroke-dashoffset="${offset}"></circle>
+                    </svg>
+                    <div class="point-box${captured ? ' captured' : ''}">
+                        <span class="point-name">${esc(name)}</span>
+                    </div>
+                `;
+                entry.appendChild(ringWrapper);
+
+                // 百分比标签
+                const progLabel = document.createElement('div');
+                progLabel.className = 'prog-label' + (captured ? ' done' : '');
+                progLabel.textContent = `${Math.round(progress)}%`;
+                entry.appendChild(progLabel);
+
+                timeline.appendChild(entry);
+
+                // 连接器（最后一个据点后不加）
+                if (idx < POINTS_ORDER.length - 1) {
+                    const conn = document.createElement('div');
+                    conn.className = 'connector' + (captured ? ' captured' : '');
+                    timeline.appendChild(conn);
+                }
+            });
+        }
+
+        function renderPlayers(players) {
+            const attackBody = document.getElementById('attack-tbody');
+            const defendBody = document.getElementById('defend-tbody');
+            attackBody.innerHTML = '';
+            defendBody.innerHTML = '';
+
+            const attackers = players
+                .filter(p => p.side === '攻')
+                .sort((a, b) => b.kd - a.kd);
+            const defenders = players
+                .filter(p => p.side === '守')
+                .sort((a, b) => b.kd - a.kd);
+
+            [attackers, defenders].forEach((list, idx) => {
+                const tbody = idx === 0 ? attackBody : defendBody;
+                list.forEach((p, i) => {
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `
+                        <td>${i + 1}</td>
+                        <td>${esc(p.name)}</td>
+                        <td>${esc(p.team)}</td>
+                        <td>${p.kills}</td>
+                        <td>${p.deaths}</td>
+                        <td>${p.kd.toFixed(2)}</td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            });
+        }
+
+        function esc(s) {
+            if (s === null || s === undefined) return '';
+            const d = document.createElement('div');
+            d.textContent = String(s);
+            return d.innerHTML;
+        }
+
+        // 首次加载并定时刷新
+        loadData();
+        setInterval(loadData, 2000);
+    </script>
+</body>
+</html>
