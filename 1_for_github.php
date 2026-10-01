@@ -36,7 +36,8 @@ if ($file === 'gf_info.txt') {
             $val = trim($val);
             if ($key === '攻方兵力') {
                 $data['attacker_forces'] = is_numeric($val) ? intval($val) : $val;
-            } else {
+            } elseif (strpos($val, '/') !== false) {
+                // 只把进度形式的行当作据点（如 A,0/100），忽略“胜利分数”等配置行
                 $parts = explode('/', $val);
                 $data['points'][$key] = intval($parts[0]);
             }
