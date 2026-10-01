@@ -2,7 +2,7 @@
 header('Content-Type: application/json; charset=utf-8');
 header('Access-Control-Allow-Origin: *');
 
-$allowedFiles = ['gf_player.csv', 'gf_info.txt'];
+$allowedFiles = ['gf_player.csv', 'gf_info.txt', 'gf_score.txt'];
 $file = $_GET['file'] ?? '';
 
 if (!in_array($file, $allowedFiles, true)) {
@@ -36,10 +36,38 @@ if ($file === 'gf_info.txt') {
             $val = trim($val);
             if ($key === '攻方兵力') {
                 $data['attacker_forces'] = is_numeric($val) ? intval($val) : $val;
-            } else {
+            } elseif (strpos($val, '/') !== false) {
+                // 只把进度形式的行当作据点（如 A,0/100），忽略“胜利分数”等配置行
                 $parts = explode('/', $val);
                 $data['points'][$key] = intval($parts[0]);
             }
+        }
+    }
+    echo json_encode($data);
+} elseif ($file === 'gf_score.txt') {
+    // 占领模式输出（由 occupationMode.cs 写入），格式：
+    //   占领模式
+    //   胜利分数,300
+    //   攻方分数,120
+    //   守方分数,80
+    //   A,45/100
+    $lines = file($fullPath, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+    $data = ['target_score' => 0, 'attacker_score' => 0, 'defender_score' => 0, 'points' => []];
+    foreach ($lines as $line) {
+        $line = trim($line);
+        if ($line === '' || strpos($line, ',') === false) continue;
+        list($key, $val) = explode(',', $line, 2);
+        $key = trim($key);
+        $val = trim($val);
+        if ($key === '胜利分数') {
+            $data['target_score'] = intval($val);
+        } elseif ($key === '攻方分数') {
+            $data['attacker_score'] = intval($val);
+        } elseif ($key === '守方分数') {
+            $data['defender_score'] = intval($val);
+        } elseif (strpos($val, '/') !== false) {
+            $parts = explode('/', $val);
+            $data['points'][$key] = intval($parts[0]);
         }
     }
     echo json_encode($data);

@@ -56,6 +56,69 @@
             margin: 0 8px;
         }
 
+        /* ========== 占领模式比分条 ========== */
+        .score-banner {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: linear-gradient(90deg, #1a2b4c, #0f1a30);
+            border-radius: 12px;
+            padding: 16px 30px;
+            margin-bottom: 12px;
+            border: 1px solid #2a3a5a;
+        }
+        .score-side {
+            display: flex;
+            align-items: baseline;
+            gap: 10px;
+        }
+        .score-side .side-name {
+            font-size: 0.9em;
+            font-weight: 600;
+        }
+        .score-side .side-name.attacker {
+            color: #5b9cf5;
+        }
+        .score-side .side-name.defender {
+            color: #f55b5b;
+        }
+        .score-val {
+            font-size: 2em;
+            font-weight: bold;
+            font-variant-numeric: tabular-nums;
+            line-height: 1.1;
+        }
+        .score-side.attacker .score-val {
+            color: #7db4ff;
+        }
+        .score-side.defender .score-val {
+            color: #ff8080;
+        }
+        .score-target {
+            text-align: center;
+            font-size: 0.8em;
+            color: #a0b0c8;
+            font-weight: 600;
+            letter-spacing: 1px;
+        }
+        .score-target .target-val {
+            display: block;
+            font-size: 1.3em;
+            color: #e0e6f0;
+            font-variant-numeric: tabular-nums;
+        }
+        .winner {
+            text-align: center;
+            color: #4fc3f7;
+            font-size: 1.3em;
+            font-weight: bold;
+            padding: 0 0 18px;
+            text-shadow: 0 0 12px rgba(90, 170, 255, 0.6);
+        }
+        .winner:empty {
+            display: none;
+        }
+
         /* ========== 时间线环形进度 ========== */
         .timeline {
             display: flex;
@@ -130,6 +193,10 @@
             border-color: #3a6bd5;
             box-shadow: 0 0 16px rgba(90, 150, 255, 0.45);
         }
+        .point-box.held {
+            border-color: #8a3a3a;
+            box-shadow: 0 0 12px rgba(200, 80, 80, 0.25);
+        }
         .prog-label {
             font-size: 0.8em;
             margin-top: 6px;
@@ -140,6 +207,9 @@
         }
         .prog-label.done {
             color: #4fc3f7;
+        }
+        .prog-label.held {
+            color: #f55b5b;
         }
         .connector {
             position: relative;
@@ -244,6 +314,18 @@
                 flex-wrap: wrap;
                 gap: 6px;
             }
+            .score-banner {
+                padding: 12px 16px;
+            }
+            .score-side .side-name {
+                font-size: 0.7em;
+            }
+            .score-val {
+                font-size: 1.5em;
+            }
+            .score-target {
+                font-size: 0.65em;
+            }
         }
     </style>
 </head>
@@ -253,11 +335,27 @@
             <h1>⚔️ 攻防实时战况</h1>
         </div>
 
-        <div class="forces-banner">
+        <div class="forces-banner" id="forces-banner">
             <div><span class="icon">🛡️</span> 攻方兵力：<span id="forces-val">--</span></div>
             <div><span class="attacker">攻方</span> <span class="icon">➹</span></div>
             <div><span class="defender">防方</span> <span class="icon">♜</span></div>
         </div>
+
+        <div class="score-banner" id="score-banner" style="display:none">
+            <div class="score-side attacker">
+                <span class="side-name attacker">攻方</span>
+                <span class="score-val" id="attacker-score">0</span>
+            </div>
+            <div class="score-target">
+                目标分数
+                <span class="target-val" id="target-score">--</span>
+            </div>
+            <div class="score-side defender">
+                <span class="score-val" id="defender-score">0</span>
+                <span class="side-name defender">守方</span>
+            </div>
+        </div>
+        <div class="winner" id="winner-label"></div>
 
         <div class="timeline" id="timeline"></div>
 
@@ -302,7 +400,8 @@
                 if (!infoRes.ok || !playersRes.ok) throw new Error('HTTP error');
                 const info = await infoRes.json();
                 const players = await playersRes.json();
-                render(info, players);
+                const score = await loadOccupationScore();
+                render(info, players, score);
                 document.getElementById('warn').textContent = '';
             } catch (e) {
                 console.error(e);
@@ -310,25 +409,62 @@
             }
         }
 
-        function render(info, players) {
-            // 兵力显示
-            document.getElementById('forces-val').textContent = info.attacker_forces ?? '--';
+        // 占领模式未运行时 gf_score.txt 不存在，返回 404 属正常情况
+        async function loadOccupationScore() {
+            try {
+                const res = await fetch('1.php?file=gf_score.txt');
+                if (!res.ok) return null;
+                const data = await res.json();
+                if (!data || data.error) return null;
+                return data;
+            } catch (e) {
+                return null;
+            }
+        }
 
-            // 渲染时间线环形进度
-            renderTimeline(info);
+        function render(info, players, score) {
+            const occupation = score !== null && score !== undefined;
 
-            // 渲染玩家列表
+            // 占领模式运行时切换为比分条，否则保持原有的兵力条
+            document.getElementById('forces-banner').style.display = occupation ? 'none' : 'flex';
+            document.getElementById('score-banner').style.display = occupation ? 'flex' : 'none';
+
+            if (occupation) {
+                renderScores(score);
+                renderTimeline(score.points);
+            } else {
+                document.getElementById('forces-val').textContent = info.attacker_forces ?? '--';
+                document.getElementById('winner-label').textContent = '';
+                renderTimeline(info.points);
+            }
+
             renderPlayers(players);
         }
 
-        function renderTimeline(info) {
+        function renderScores(score) {
+            const attacker = Number(score.attacker_score) || 0;
+            const defender = Number(score.defender_score) || 0;
+            const target = Number(score.target_score) || 0;
+
+            document.getElementById('attacker-score').textContent = attacker;
+            document.getElementById('defender-score').textContent = defender;
+            document.getElementById('target-score').textContent = target > 0 ? target : '--';
+
+            let winner = '';
+            if (target > 0 && attacker >= target) winner = '🎉 攻方率先达标，获得胜利！';
+            else if (target > 0 && defender >= target) winner = '🎉 守方率先达标，获得胜利！';
+            document.getElementById('winner-label').textContent = winner;
+        }
+
+        function renderTimeline(points) {
             const timeline = document.getElementById('timeline');
             timeline.innerHTML = '';
 
             POINTS_ORDER.forEach((name, idx) => {
-                const rawProgress = info.points ? (info.points[name] ?? 0) : 0;
+                const rawProgress = points ? (points[name] ?? 0) : 0;
                 const progress = Math.min(100, Math.max(0, Number(rawProgress) || 0));
                 const captured = progress >= 100;
+                const held = progress <= 0;
 
                 // 据点容器
                 const entry = document.createElement('div');
@@ -340,6 +476,7 @@
 
                 const offset = SVG_CIRCUMFERENCE * (1 - progress / 100);
                 const progressClass = captured ? ' completed' : '';
+                const boxClass = captured ? ' captured' : (held ? ' held' : '');
 
                 ringWrapper.innerHTML = `
                     <svg viewBox="0 0 ${SVG_SIZE} ${SVG_SIZE}" xmlns="http://www.w3.org/2000/svg">
@@ -350,7 +487,7 @@
                                 stroke-dasharray="${SVG_CIRCUMFERENCE}"
                                 stroke-dashoffset="${offset}"></circle>
                     </svg>
-                    <div class="point-box${captured ? ' captured' : ''}">
+                    <div class="point-box${boxClass}">
                         <span class="point-name">${esc(name)}</span>
                     </div>
                 `;
@@ -358,7 +495,7 @@
 
                 // 百分比标签
                 const progLabel = document.createElement('div');
-                progLabel.className = 'prog-label' + (captured ? ' done' : '');
+                progLabel.className = 'prog-label' + (captured ? ' done' : (held ? ' held' : ''));
                 progLabel.textContent = `${Math.round(progress)}%`;
                 entry.appendChild(progLabel);
 
