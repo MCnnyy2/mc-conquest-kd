@@ -7,15 +7,41 @@ $csvFile = '/gf_player.csv';
 $infoFile = '/gf_info.txt';
 $proxyUrl = ''; //代理bluemap的网址
 
+// ---------- CSRF 令牌 ----------
+if (empty($_SESSION['csrf'])) {
+    $_SESSION['csrf'] = bin2hex(random_bytes(32));
+}
+$csrfToken = $_SESSION['csrf'];
+
+/**
+ * 所有会改变状态的操作都必须带正确令牌，防止第三方页面伪造请求。
+ * 同时用于登录，避免登录 CSRF。
+ */
+function checkCsrf() {
+    $token = $_POST['csrf'] ?? '';
+    if (!is_string($token) || $token === '' || !hash_equals($_SESSION['csrf'] ?? '', $token)) {
+        http_response_code(403);
+        exit('CSRF 校验失败，请刷新页面后重试。');
+    }
+}
+
 // ---------- 登录 ----------
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['password'])) {
-    if ($_POST['password'] === $password) {
+    checkCsrf();
+    // hash_equals：定长比较，避免通过响应时间逐字节猜测密码
+    if ($password !== '' && hash_equals($password, (string)$_POST['password'])) {
+        session_regenerate_id(true);                    // 防会话固定
         $_SESSION['admin'] = true;
+        $_SESSION['csrf'] = bin2hex(random_bytes(32));  // 登录后轮换令牌
+        $csrfToken = $_SESSION['csrf'];
     } else {
-        $error = '密码错误';
+        $error = $password === ''
+            ? '尚未配置场务密码，请先在脚本顶部设置 $password'
+            : '密码错误';
     }
 }
 if (isset($_GET['logout'])) {
+    $_SESSION = [];
     session_destroy();
     header('Location: team_assign.php');
     exit;
@@ -25,7 +51,8 @@ if (empty($_SESSION['admin'])) {
     <!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>场务登录</title>
     <style>body{font-family:sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;background:#1a1a2e;color:#eee;margin:0;} form{background:#16213e;padding:30px;border-radius:12px;width:90%;max-width:350px;} input{width:100%;box-sizing:border-box;padding:10px;margin:10px 0;border-radius:6px;border:none;background:#0d1425;color:#eee;} button{width:100%;padding:10px;background:#3a6bd5;color:white;border:none;border-radius:6px;font-size:1em;}</style>
     </head><body><form method="post"><h2>攻防战场务管理</h2>
-    <?php if(isset($error)) echo "<p style='color:red'>$error</p>"; ?>
+    <?php if(isset($error)) echo "<p style='color:red'>" . htmlspecialchars($error) . "</p>"; ?>
+    <input type="hidden" name="csrf" value="<?= htmlspecialchars($csrfToken) ?>">
     <input type="password" name="password" placeholder="密码"><button type="submit">登录</button></form></body></html>
     <?php
     exit;
@@ -34,6 +61,23 @@ if (empty($_SESSION['admin'])) {
 // ---------- 辅助函数 ----------
 function canonName($name) {
     return strtolower(str_replace(['.', '_'], '', $name));
+}
+
+/**
+ * 清洗玩家名。
+ * 去掉控制字符（换行、制表、NUL 等），否则名字里塞一个 \n 就能往 CSV 里
+ * 注入额外的行；再限制长度，并拒绝会破坏 CSV 列结构的逗号与双引号。
+ * 返回 null 表示非法。
+ */
+function sanitizePlayerName($name) {
+    $name = (string)$name;
+    $name = preg_replace('/[\x00-\x1F\x7F]/u', '', $name);
+    if ($name === null) return null;   // 非法 UTF-8，preg_replace 返回 null
+    $name = trim($name);
+    if ($name === '') return null;
+    if (mb_strlen($name) > 32) return null;
+    if (strpbrk($name, ',"') !== false) return null;
+    return $name;
 }
 
 function readPlayers() {
@@ -68,7 +112,8 @@ function writePlayers($players) {
     foreach ($attackers as $p) $lines[] = implode(',', [$p['name'], $p['kills'], $p['deaths'], $p['team']]);
     $lines[] = "守方";
     foreach ($defenders as $p) $lines[] = implode(',', [$p['name'], $p['kills'], $p['deaths'], $p['team']]);
-    file_put_contents($csvFile, implode("\n", $lines) . "\n");
+    // LOCK_EX：避免与 MCC 脚本 / Web 端并发写入时互相截断
+    file_put_contents($csvFile, implode("\n", $lines) . "\n", LOCK_EX);
 }
 
 /**
@@ -154,15 +199,16 @@ $message = '';
 $messageType = '';
 
 if (isset($_POST['action']) && $_POST['action'] === 'assign') {
-    $name = trim($_POST['player'] ?? '');
+    checkCsrf();
+    $name = sanitizePlayerName($_POST['player'] ?? '');
     $side = $_POST['side'] ?? '攻';
-    $team = strtoupper(trim($_POST['team'] ?? 'A'));
+    $team = strtoupper(trim((string)($_POST['team'] ?? 'A')));
 
-    if (!in_array($side, ['攻', '守'])) $side = '攻';
+    if (!in_array($side, ['攻', '守'], true)) $side = '攻';
     if (!preg_match('/^[A-Z]$/', $team)) $team = 'A';
 
-    if ($name === '') {
-        $message = '玩家名不能为空';
+    if ($name === null || canonName($name) === '') {
+        $message = '玩家名无效：不能为空或只含 . _，不能包含逗号或引号，长度不超过 32';
         $messageType = 'error';
     } else {
         $players = readPlayers();
@@ -190,8 +236,15 @@ if (isset($_POST['action']) && $_POST['action'] === 'assign') {
 }
 
 if (isset($_POST['action']) && $_POST['action'] === 'kick') {
-    $name = $_POST['player'] ?? '';
-    $targetCanon = canonName($name);
+    checkCsrf();
+    $name = sanitizePlayerName($_POST['player'] ?? '');
+    $targetCanon = $name === null ? '' : canonName($name);
+
+    if ($targetCanon === '') {
+        echo json_encode(['success' => false, 'error' => '玩家名无效'], JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
+        exit;
+    }
+
     $players = readPlayers();
     $newPlayers = [];
     $kicked = false;
@@ -206,16 +259,17 @@ if (isset($_POST['action']) && $_POST['action'] === 'kick') {
 
     if ($kicked) {
         writePlayers($newPlayers);
-        echo json_encode(['success' => true]);
+        echo json_encode(['success' => true], JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
     } else {
-        echo json_encode(['success' => false, 'error' => '玩家不存在']);
+        echo json_encode(['success' => false, 'error' => '玩家不存在'], JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
     }
     exit;
 }
 
 if (isset($_POST['action']) && $_POST['action'] === 'reset') {
-    file_put_contents($csvFile, "攻方\n守方\n");
-    file_put_contents($infoFile, "攻防数据\nA,0/100\nB1,0/100\nB2,0/100\nC1,0/100\nC2,0/100\n攻方兵力, 0\n");
+    checkCsrf();
+    file_put_contents($csvFile, "攻方\n守方\n", LOCK_EX);
+    file_put_contents($infoFile, "攻防数据\nA,0/100\nB1,0/100\nB2,0/100\nC1,0/100\nC2,0/100\n攻方兵力, 0\n", LOCK_EX);
     $message = '游戏文件已重置';
     $messageType = 'success';
 }
@@ -497,6 +551,7 @@ $suggestionText = "建议分配至：{$suggestion['side']} / {$suggestion['team'
         <h3>⚠️ 重置游戏</h3>
         <p>清空 gf_player.csv 和 gf_info.txt 为初始状态。</p>
         <form method="post" onsubmit="return confirm('确定重置？所有数据将丢失！');">
+            <input type="hidden" name="csrf" value="<?= htmlspecialchars($csrfToken) ?>">
             <input type="hidden" name="action" value="reset">
             <button type="submit" class="danger-btn">重置所有文件</button>
         </form>
@@ -509,9 +564,10 @@ function normName(s) {
     return String(s).toLowerCase().replace(/[._]/g, '');
 }
 
-const assignedNames = <?= json_encode($assignedNames) ?>;
-const teamStats = <?= json_encode($teamStats) ?>;
-const proxyUrl = <?= json_encode($proxyUrl) ?>;
+const assignedNames = <?= json_encode($assignedNames, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
+const teamStats = <?= json_encode($teamStats, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
+const proxyUrl = <?= json_encode($proxyUrl, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
+const CSRF = <?= json_encode($csrfToken, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
 const assignedNormSet = new Set(assignedNames.map(normName));
 
 let selectedSide = '攻';
@@ -654,7 +710,7 @@ document.getElementById('assignBtn').addEventListener('click', () => {
     fetch('', {
         method: 'POST',
         headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-        body: `action=assign&player=${encodeURIComponent(name)}&side=${encodeURIComponent(selectedSide)}&team=${encodeURIComponent(selectedTeam)}`
+        body: `action=assign&player=${encodeURIComponent(name)}&side=${encodeURIComponent(selectedSide)}&team=${encodeURIComponent(selectedTeam)}&csrf=${encodeURIComponent(CSRF)}`
     }).then(r => r.text()).then(() => location.reload());
 });
 
@@ -721,7 +777,7 @@ function toggleKickSlider(btn) {
             fetch('', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-                body: `action=kick&player=${encodeURIComponent(playerName)}`
+                body: `action=kick&player=${encodeURIComponent(playerName)}&csrf=${encodeURIComponent(CSRF)}`
             }).then(r => r.json()).then(data => {
                 if (data.success) {
                     // 踢出成功后刷新页面，确保小队人数、总信息等统计更新
